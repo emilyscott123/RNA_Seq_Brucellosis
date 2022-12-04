@@ -1,0 +1,257 @@
+---
+title: "BRUCELLOSIS_RNASeq"
+author: "EmilyScott"
+date: "12/3/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Differential Expression of Genes for Acute versus Chronic Brucellosis Patients
+
+### Introduction 
+
+Brucellosis is a disease caused by bacterial pathogens Brucella melitensis (BM) and B. abortus. In humans, it manifests as Malta fever and in animals, another symptom is abortion. Patients diagnosed with Brucellosis have 4 outcome; acute diagnosis and treatment responsive, acute diagnosis and treatment unresponsive, chronic diagnosis and treatment responsive, chronic diagnosis and treatment unresponsive. 
+This study will explore gene expression differences between acute brucellosis and chronic brucellosis to identify novel genes related to vastly differing diagnosis. The dataset “Refining brucellosis diagnosis by blood transcriptional profiling,” from recount2 will be used to identify these novel biomarkers because it has a large sample number and enough metadata to determine if there are any confounding variables. A whole blood RNAseq was completed on patients in Spain and Macedonia with brucellosis(n=105), healthy controls(n=47), (total n = 169). Long term data was collected on these patients by the Benaroya Research Institute to obtain their status as acute versus chronic brucellosis patient and treatment responder versus treatment non-responder. The Benaroya Research Institute published this study in an effort to refine brucellosis diagnosis by blood transcriptional profiling and determining important blood biomarkers. In my experiment, I will be using the characteristic variable diagnosis from their dataset to determine which samples were taken from patients with acute or chronic brucellosis.
+
+In the world, 500000 new cases of brucellosis have been reported annually(Alavi, 2013). The effects of a brucellosis diagnosis are not to be taken for granted. Brucella has been tied to stress related genes (Zhang, 2009) and there was a woman who once developed chronic brucellosis that lasted for 19 years(Kawakami, 2019). Brucellosis has also been linked to an increased severity and possibly onset of acute pancreatitis(Suvak, 2016). In some rare cases, human meningitis can be infected with brucella result in worsened diagnosis with epilepsy as a serious symptom(Li, 2019). 
+
+In the past, treatment of brucellosis has not been uniform, there has been controversy (Alavi, 2013). Part of the controversy is due to the fact that different types of brucellosis respond better to different treatments but overall in uncomplicated brucellosis, a doxycycline-aminoglycoside combination is the first choice. Another complication is the age of the patient. Patients eight years old or younger tend to respond better to cotrimoxazole plus rifampin. 
+
+I hypothesize that I will see a stress related gene expression difference between acute and chronic brucellosis diagnosis.  Past research on the interaction between stress and brucellosis shows a molecular mechanism between stress response and bacterial virulence (Liu, 2015). I am expecting a large amount of genes that would normally activate when the body is attaced with bacteria. A number of white blood cell signaling genes due to the body fighting the brucella bacteria should be present but I also expect stress to be a factor in whether or not the body is successful in that effort. 
+
+Response to treatment is useful to have in DESeqDataSet to investigate its ability to be a confounding factor. I will also filter out lowly expressed genes from my scaled counts in order to use only the genes that are highly expressed. I would hypothesis that children under eight years old with chronic brucellosis had higher levels of stress related biomarkers. I will also subset out p-values of 0.001 for enrichment analysis to obtain a closer look at specific genes.
+
+### Coding
+
+Load the libraries needed.
+```{r}
+## ----"load libraries", message = FALSE, warning = FALSE--------------------
+suppressWarnings(suppressMessages(library("recount")))
+suppressWarnings(suppressMessages(library("GenomicRanges")))
+suppressWarnings(suppressMessages(library("limma")))
+suppressWarnings(suppressMessages(library("edgeR")))
+suppressWarnings(suppressMessages(library("DESeq2")))
+suppressWarnings(suppressMessages(library("regionReport")))
+suppressWarnings(suppressMessages(library("clusterProfiler")))
+suppressWarnings(suppressMessages(library("org.Hs.eg.db")))
+suppressWarnings(suppressMessages(library("gplots")))
+suppressWarnings(suppressMessages(library("derfinder")))
+suppressWarnings(suppressMessages(library("rtracklayer")))
+suppressWarnings(suppressMessages(library("GenomicFeatures")))
+suppressWarnings(suppressMessages(library("bumphunter")))
+suppressWarnings(suppressMessages(library("derfinderPlot")))
+suppressWarnings(suppressMessages(library("sessioninfo")))
+suppressWarnings(suppressMessages(library("dplyr")))
+suppressWarnings(suppressMessages(library("ggplot2")))
+suppressWarnings(suppressMessages(library("pheatmap")))
+suppressWarnings(suppressMessages(library("RColorBrewer")))
+suppressWarnings(suppressMessages(library("clusterProfiler")))
+suppressWarnings(suppressMessages(library("org.Hs.eg.db")))
+
+```
+
+### Import "Refining brucellosis diagnosis by blood transcriptional profiling" dataset from recount2
+The instrument used here was Illumina HiSeq 2500, which is normally used for short reads.
+```{r}
+#Search for and load the brucellosis data from recount2
+project_info<-abstract_search('brucellosis')  
+download_study(project_info$project)
+load(file.path(project_info$project, 'rse_gene.Rdata'))
+#Browse the data online
+browse_study(project_info$project)
+```
+
+### Explore Brucellosis Dataset
+
+```{r}
+#Look at recount data information using the following lines of code
+#make sure there are 169 samples
+dim(colData(rse_gene))
+#GEO info for SRP059172
+head(colData(rse_gene)$geo_accession)
+#Look at feature info using this
+head(rowRanges(rse_gene))
+#look at counts using this
+head(assays(rse_gene)$counts)
+#look at sample metadata using this
+head(colData(rse_gene))
+```
+
+
+### Scale counts and Create Diagnosis Grouping
+We are grouping the sampling into Acute and Chronic brucellosis diagnosis to find expression explanations for their different outcomes.
+Here we use a filter to extract only the highly genes expressed with a mean count above 50%. 
+We also create a variable, geochar, to house all of the characteristics of our dataset. We use this variable to help create a new column in the dataset specifically for the diagnosis, either "Acute" or "Chronic".
+```{r}
+#scale counts
+rse_SRP059172<-scale_counts(rse_gene)
+#take out the scaled counts with assays()$counts
+counts<-assays(rse_SRP059172)$counts
+#Filter out the lowly expressed genes using counts to get a TRUE/FALSE filter variable
+filter<-rowMeans(counts)>0.6
+
+#pull out the characteristics into geochar
+geochar <- lapply(split(colData(rse_gene), seq_len(nrow(colData(rse_gene)))), geo_characteristics)
+#make group column in scaled data using geochar
+colData(rse_SRP059172)$group <- as.factor(ifelse(grepl('Acute brucellosis', (history<-sapply(geochar,"[", 3))), 'Acute', 'Chronic'))
+colData(rse_SRP059172)$response<-as.factor(ifelse(grepl('Complete remission',(history<-sapply(geochar,"[", 4))),'Complete remission','Reinfection'))
+```
+
+### Exploratory Analysis for the Brucellosis Dataset 
+```{r}
+#Look at recount data information using the following lines of code 
+#Look at feature info using this
+head(rowRanges(rse_SRP059172))
+#look at counts using this
+head(assays(rse_SRP059172)$counts)
+#look at sample metadata using this
+head(colData(rse_SRP059172))
+```
+
+Compute DESeq results by creating a DESeqDataSet object, a DESeq object, and using results(). 
+```{r}
+#use DESeqDataSet with the filtered out high expressing genes and grouped by acute or chronic
+dds_SRP059172<-DESeqDataSet(rse_SRP059172, ~group)
+#change rownames so gene names are clear later on in GO enrichment code and plot
+rownames(dds_SRP059172) <- gsub("\\..*", "", rownames(dds_SRP059172))
+#use DESeq 
+dds_SRP059172<-DESeq(dds_SRP059172)
+#compute results
+res_SRP059172<-results(dds_SRP059172)
+```
+
+Look at the top gene of the dataset to visually explore the difference between acute and chronic.
+We expect chronic remission and reinfection to be significantly different from acute remission and reinfection. 
+```{r}
+#Find the top gene and plot it with normalized counts
+topGene <- rownames(res_SRP059172)[which.min(res_SRP059172$padj)]
+plotCounts(dds_SRP059172, gene = topGene, intgroup=c("group", "response"))
+geneCounts <- plotCounts(dds_SRP059172, gene = topGene, intgroup = c("group", "response"),
+                         returnData = TRUE)
+```
+Figure 1. Top Gene: Normalized counts grouped by acute/chronic and remission/reinfection. 
+
+We see in this plot that while the acute samples are slightly higher than the chronic, they overlap and are not significantly different. 
+
+### VST
+
+Transform DESeq (dds) with VST and show the change in a plot.
+Since there are 169 samples in this dataset, we can feel comfortable using VST to transform the brucellosis data and remove some data points.
+We expect the dots to change from very dispersed to less and the bottom left quardrent of the plot to disappear. 
+```{r}
+#Transform with VST
+vsd_SRP059172<-vst(dds_SRP059172, blind=FALSE)
+
+#Take a look at the transformed data
+head(assay(vsd_SRP059172), 3)
+colData(vsd_SRP059172)
+
+#estimate size factors of dds using the median ration method 
+dds_SRP059172<-estimateSizeFactors(dds_SRP059172)
+#create data frame for vst vs dds comparison plot
+df_dds_vst<-bind_rows(as_data_frame(log2(counts(dds_SRP059172, normalized=TRUE)[,1:2]+1))%>%mutate(transformation="log2(x+1)"),as_data_frame(assay(vsd_SRP059172)[,1:2])%>%mutate(transformation="vst"))
+#Make labels for vst plot
+colnames(df_dds_vst)[1:2]<-c("x","y")
+#plot the vst vs the dds data. As you can see in the plot, there is a big change in the vst plot that allows the data to become more uniform and less dispersed. VST has part of the bottom left quartile (short reads) taken out to decrease variability because we have enough samples (169) without it interferring with the experiment. 
+ggplot(df_dds_vst, aes(x=x, y=y))+geom_hex(bins=80)+coord_fixed()+facet_grid(.~transformation)
+```
+Figure 2. DDS vs VST: Normalized counts transformed with VST (right) versus not transformed (left).
+
+The data points have become less dispersed, but they could do even better, and the bottom left corner of the plot does not have any data points anymore. 
+
+### PCA
+
+Plot Principal Components Analysis of the vst transformed data grouped by diagnosis acute or chronic.
+We expect a large separation, two clusters, one for chronic and one for acute brucellosis. 
+```{r}
+#plot PCA and split it into two groups, those with chronic brucellosis and those with acute brucellosis. We see here that the acute are on the left side only  while the chronic are all over the plot.
+plotPCA(vsd_SRP059172, intgroup=c("group"))
+plotPCA(vsd_SRP059172, intgroup=c("response"))
+plotPCA(vsd_SRP059172, intgroup=c("group", "response"))
+```
+Figure 3. a. PCA plot of chronic/acute.
+b. PCA plot of remission/reinfection. 
+c. PCA plot of both chronic/acute and remission/reinfection. 
+
+These first two plots show a mild separation between acute and chronic with acute staying on the left hand side and chronic on the right and the left. The third plot shows chronic reinfection are the main dots that are on the right hand side of the plot. 
+
+### MA Plot
+
+Create MA plot of the dds results data for the brucellosis dataset. This plot visualizes the differences between measurements taken in acute and chronic samples, by transforming the data onto M (log ratio) and A (mean average) scales, then plotting these values. 
+Use lfcShrink with type apeglm to shrink the log2 fold changes for the diagnosis comparison.
+We expect to see a large change after shrinking the log fold changes and the gray area of the plot to closely surround the midline. 
+```{r}
+#MA plot with log 2 fold changes shrunk with apeglm
+#dds_SRP059172<- DESeq(dds_SRP059172)
+res_SRP059172 <- lfcShrink(dds_SRP059172, coef="group_Chronic_vs_Acute", type="apeglm")
+MAplot_group<-plotMA(res_SRP059172, main="MA Plot: DESeq2 results for SRP059172")
+```
+Figure 4. MA Plot of results after shrinking log2 fold changes. Red dots are the genes with adjusted p values below threshold.
+
+This is an MA-plot of changes from being diagnosed with either acute or chronic brucellosis. The log2 fold change for a particular comparison is plotted on the y-axis and the average of the counts normalized by size factor is shown on the x-axis. Each gene is represented with a dot. Genes with an adjusted p value below a threshold (here 0.1, the default) are shown in red. The gray area of the plot could be surrounding the midline tighter than it currently is for a better fit. 
+
+### Heatmap
+
+In the following code, we create a heatmap using the top 10 genes. We are looking at how the genes vary from the average across samples.  Diagnosis and response to treatment are shown in the labels and in the top 2 rows.
+We expect to see a difference between chronic and acute gene expression. 
+```{r}
+topVarGenes <- head(order(rowVars(assay(vsd_SRP059172)), decreasing = TRUE), 10)
+
+mat  <- assay(vsd_SRP059172)[ topVarGenes, ]
+mat  <- mat - rowMeans(mat)
+anno <- as.data.frame(colData(vsd_SRP059172)[, c("response","group")])
+pheatmap(mat, annotation_col = anno)
+```
+Figure 5. Heapmap of top 10 genes with acute/chronic and remission/reinfection row labels at the top.
+
+As you can see in the heatmap, the ENSG00000213058 gene separated the genes into two groups while not falling in either. The top group is highly expressed on the left where there is more chronic reinfection while on the right those genes aren't as highly expressed. The bottom genes are the opposite, they are not lowly expressed on the left where there is more chronic reinfection and have medium expression on the right. 
+
+###GO Enrichment
+
+In the following plot we should see items that protect the body from bacteria like brucella and we should see some stress related items.
+```{r}
+#GO enrichment
+## Remember that res had ENSEMBL IDs for the genes
+head(rownames(res_SRP059172))
+## Perform enrichment analysis for Biological Process (BP)
+enrich_go_SRP059172 <- enrichGO(
+  gene = rownames(res_SRP059172)[res_SRP059172$padj < 0.001],
+  OrgDb = org.Hs.eg.db, keyType = "ENSEMBL", ont = "BP",
+  pAdjustMethod = "BH", pvalueCutoff = 0.01, qvalueCutoff = 0.05,
+  universe = rownames(res_SRP059172))
+## Visualize enrichment results. It show high count of t cell activation.
+dotplot(enrich_go_SRP059172, font.size = 7)
+```
+Figure 6. GO Enrichment Plot with size showing count and color showing p value. 
+
+Most of the items listed in the above GP plot are related to t-cells and this is to be expected because t cells are primarily what protect us from bacteria like brucellea. There is no stress related items on this plot, which means our hypothesis is incorrect.
+
+
+### Conclusion
+
+We did not see an increase in the stress related gene expression and our hypothesis was incorrect. However, we did see a large amount of genes related to protecting the body from bacteria. We see evidence of t cells, lymphocytes, leukocytes, neutrophils, and granulocytes in the GO enrichment. The heatmap showed preliminary results for chronic reinfection samples that have two genes very highly expressed (ENSG00000229807 and ENSG00000270641). Both of which are inactive and one of them believed to be an evolutionary vestige (ENSG00000270641). This may require further investigation to determine whether that gene actually is a vestige or it is useful in determining the difference between chronic diagnosis and acute diagnosis. The MA plot could have shown a better difference between chronic and acute diagnosis. The gray dots strayed from the midline. While the diagnosis group and response PCA plot looked almost the same, with acute on the left and chronic everywhere, we were able to see from combined PCA plot that chronic reinfection samples were the main samples staying on the right hand side. I hypothesis that there is a confounding variable for those samples that is not present in the other chronic samples and probably not in the acute samples either. The topgene plot shows that even though we have a large sample number, there is still an overlap between chronic and acute for the top gene in the dds data. Unfortunately in this dataset, the age metadata was not available and therefore I could not determine whether or not that was a confounding factor. If age metadata was provided, I would hypothesis that children under eight years old with chronic brucellosis had higher levels of stress related biomarkers. 
+
+### References
+
+Liu W, Dong H, Li J, et al. RNA-seq reveals the critical role of OtpR in regulating Brucella melitensis metabolism and virulence under acidic stress. Sci Rep. 2015;5:10864. Published 2015 Aug 5. doi:10.1038/srep10864
+
+Zhang X, Ren J, Li N, Liu W, Wu Q. Disruption of the BMEI0066 gene attenuates the virulence of Brucella melitensis and decreases its stress tolerance. Int J Biol Sci. 2009;5(6):570–577. Published 2009 Sep 1. doi:10.7150/ijbs.5.570
+
+Sternon JF, Godessart P, Gonçalves de Freitas R, et al. Transposon Sequencing of Brucella abortus Uncovers Essential Genes for Growth In Vitro and Inside Macrophages. Infect Immun. 2018;86(8):e00312-18. Published 2018 Jul 23. doi:10.1128/IAI.00312-18
+
+Brambila-Tapia AJ, Armenta-Medina D, Rivera-Gomez N, Perez-Rueda E. Main functions and taxonomic distribution of virulence genes in Brucella melitensis 16 M. PLoS One. 2014;9(6):e100349. Published 2014 Jun 25. doi:10.1371/journal.pone.0100349
+
+DelVecchio VG, Kapatral V, Redkar RJ, et al. The genome sequence of the facultative intracellular pathogen Brucella melitensis. Proc Natl Acad Sci U S A. 2002;99(1):443–448. doi:10.1073/pnas.221575398
+
+Li X, Wang Q, Gong J, Huang F, Feng J, Liang J, Hu B. Rare Meningitis and Epileptic Seizure Infected with Brucella melitensis: a Case Report. Clin Lab. 2019;65(11). doi: 10.7754/Clin.Lab.2019.180624.
+
+Kawakami N1, Wakai Y1, Saito K1, Imaoka K2. Chronic Brucellosis in Japan. Intern Med. 2019;58(21):3179-3183. doi: 10.2169/internalmedicine.2961-19. Epub 2019 Nov 1.
+
+Suvak B1, Dulger AC1, Karadas S2, Gonullu H3, Bayram Y4, Gonullu E5, Batur A6, Aykaç MC2, Gunduz AM7, Aytemiz E8, Guducuoglu H4. Brucellosis-related acute pancreatitis: A rare complication of a universal disease. J Int Med Res. 2016 Feb;44(1):131-5. doi: 10.1177/0300060515583078. Epub 2015 Dec 7.
+
+Alavi, S. M., & Alavi, L. (2013). Treatment of brucellosis: a systematic review of studies in recent twenty years. Caspian journal of internal medicine, 4(2), 636–641.
+
+
